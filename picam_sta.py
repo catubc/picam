@@ -1,10 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-import struct, os
+import struct, os, sys
 import matplotlib.animation as animation
 import matplotlib.gridspec as gridspec
 from tools import tsf_ptcs_classes as tsf_ptcs 
+
+sys.path.append('/home/cat/code/')
+import TSF.TSF as TSF
+import PTCS.PTCS as PTCS
 
 colors = ['b','r', 'g', 'c','m','y','k','b','r']
 
@@ -24,11 +28,134 @@ def find_nearest_180(array,value,dist):
         
 #************************* LOAD SPIKING *****************************
 
-ephys_filename= '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/ephys/track_1_spontaneous_1_170126_153637_hp.ptcs'
+#ephys_filename= '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/ephys/track_1_spontaneous_1_170126_153637_hp.ptcs'
+sua_filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/sort_alltrack_spontaneous/track_1_spontaneous_1_170126_153637_hp_butter_alltrack.ptcs'
 
-sort_sua =  tsf_ptcs.Ptcs(ephys_filename)
+sort_sua =  tsf_ptcs.Ptcs(sua_filename)
 
-print len(sort_sua.units)
+print "... # units: ", len(sort_sua.units)
+
+
+#*********************** FIND BLUE LIGHT ON/OFF IN EPHYS *********************
+
+lfp_filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/sort_alltrack_spontaneous/track_1_spontaneous_1_170126_153637_lfp_100hz_alltrack.tsf'
+
+epoch_file = lfp_filename[:-4]+"_epochs.txt"
+if os.path.exists(epoch_file)==False: 
+
+    tsf = TSF.TSF(lfp_filename)
+    tsf.read_footer()
+
+    on_times = []
+    off_times = []
+    offset = 0
+
+    for f in range(tsf.n_files[0]):
+        #for k in range(tsf.n_digital_chs[f]):
+        k = 0 #Only first channel contains on/off lights for imaging camera
+        plt.plot(tsf.digital_chs[f][k][::10])
+
+        #Find transitions to on and off
+        for s in range(0, len(tsf.digital_chs[f][k])-25, 25):
+            if tsf.digital_chs[f][k][s]!=tsf.digital_chs[f][k][s+25]:
+                if tsf.digital_chs[f][k][s]==0: on_times.append(s+offset)
+                else: off_times.append(s+offset)
+        plt.show()
+        offset = offset + tsf.n_samples[f] #Must offset future times by recording time;
+        
+    epochs = []
+    for k in range(len(on_times)):
+        epochs.append([on_times[k], off_times[k]])
+    print epochs
+
+    np.savetxt(epoch_file, epochs, fmt='%i')
+
+else:
+    epochs = np.loadtxt(epoch_file)
+
+
+#*************************** LOAD LIST OF IMAGING FILES ******************
+
+imaging_filenames = os.path.split(sua_filename)[0]+'/imaging_files.txt'
+imaging_files = np.loadtxt(imaging_filenames, dtype=str)
+print imaging_files
+print imaging_files[0]
+
+
+#*************************** FIND BLUE LIGHT ON/OFF IN IMAGING ********************
+root_dir = os.path.split(os.path.split(sua_filename)[0])[0]
+
+n_pixels = int(np.loadtxt(root_dir+'/n_pixels.txt'))
+
+#LOAD Imaging data
+imaging_epochs = []
+for filename in imaging_files:
+
+    if os.path.exists(filename[:-4]+".npy")==False:
+        stream = open(filename, 'rb')
+
+        #Y = np.fromfile(stream, dtype=np.uint8, count=width*height*frames*3).reshape((frames, height, width, 3))
+        Y = np.fromfile(stream, dtype=np.uint8).reshape((-1, n_pixels, n_pixels, 3))
+    
+        np.save(filename[:-4], Y)
+        
+        imaging_epochs.append(Y)
+    else:
+        imaging_epochs.append(np.load(filename[:-4]+'.npy', mmap_mode='c'))
+
+
+#Search imaging data for light on/off ************* FOR NOW MUST MANUALLY SET THESE ***************
+
+imaging_onoff_file = os.path.split(sua_filename)[0]+'/imaging_onoff.txt'
+if os.path.exists(imaging_onoff_file)==False: 
+    for p in range(len(imaging_epochs)):
+        blue = imaging_epochs[p][:,64:65,50,1]
+        print blue.shape
+
+        lighton_trace = np.mean(blue, axis=1)
+
+else:
+    imaging_onoff = np.loadtxt(imaging_onoff_file, dtype=np.int32)
+
+print imaging_onoff
+#Clip all the imaging records to the on/off periods
+
+for e in range(len(imaging_epochs)):
+    print imaging_epochs[e].shape
+    imaging_epochs[e] = imaging_epochs[e][imaging_onoff[e][0]:imaging_onoff[e][1]]
+    
+    print imaging_epochs[e].shape, '\n'
+
+#Y = np.float32(Y)
+#on_off = [186,17217]
+#Y = Y[on_off[0]:on_off[1]]
+#for k in range(len(Y)):
+#    Y[k] = np.flipud(np.fliplr(Y[k]) )
+    
+#quit()
+
+
+#****************** LOAD FRAME TIMES ***************
+for imaging_file in imaging_files:
+    
+    frame_times = np.loadtxt(imaging_file+"_time.txt",dtype=str)
+    if frame_times[0]=="none":
+        pass
+    else:
+        frame_times = np.int64(frame_times)
+    print frame_times
+
+
+
+
+
+
+quit()
+
+
+
+
+
 
 epoch_file = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/ephys/track_1_spontaneous_1_170126_153637_epochs.txt'
 
@@ -38,30 +165,6 @@ print epochs
 
 imaging_start_offset = epochs[0][0]
 
-
-#*************************** LOAD IMAGING AND FIND BLUE LIGHT ON/OFF LOCATIONS***********************
-filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/imaging/track_1_spontaneous_1.raw'
-
-stream = open(filename, 'rb')
-
-width = 128
-height = 128
-frames = 17979
-Y = np.fromfile(stream, dtype=np.uint8, count=width*height*frames*3).reshape((frames, height, width, 3))
-Y = np.float32(Y)
-
-
-#plt.plot(np.mean(Y[:,64:65,:,1],axis=1))
-#plt.show()
-
-#print Y.shape
-
-on_off = [186,17217]
-
-Y = Y[on_off[0]:on_off[1]]
-
-for k in range(len(Y)):
-    Y[k] = np.flipud(np.fliplr(Y[k]) )
 
 
 #************************ MASK IMAGING DATA ***********************
@@ -88,7 +191,7 @@ print offset_frame_times
 
 #*********************** COMPUTE DF/F USING GLOBAL SIGNAL REGRESSION
 
-
+#Select only single channel
 data = Y[:,:,:,1]
 
 if False:
@@ -217,10 +320,6 @@ for unit in units:
     plt.suptitle("Cell: "+str(unit) + " # spikes: "+str(len(spikes))+"\nDF/F max: "+str(round(v_max*100,1))+"%", fontsize=30)
     plt.show()
         
-
-
-
-
 
 
 #for k in range(len(Y)):
