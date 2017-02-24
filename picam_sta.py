@@ -1,4 +1,8 @@
 import numpy as np
+
+#import matplotlib
+#matplotlib.use('Agg')  #Tkinter for some reason uses this.... otherwise get periodic crashes.
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import struct, os, sys
@@ -11,6 +15,7 @@ import PTCS.PTCS as PTCS
 
 from picam_utils import *
 
+
 #**************************************************************************************
 
 colors = ['b','r', 'g', 'c','m','y','k','b','r']
@@ -18,14 +23,20 @@ n_processes = 10
 
 selected_epoch = 1
 
+print "... selected epoch: ", selected_epoch
 #************************* LOAD SPIKING FOR SINGLE RECORDING OR WHOLE TRACK *****************************
-sua_filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/sort_alltrack_spontaneous/track_1_spontaneous_1_170126_153637_hp_butter_alltrack.ptcs'
+#sua_filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/sort_alltrack_spontaneous/track_1_spontaneous_1_170126_153637_hp_butter_alltrack.ptcs'
+#sua_filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/sort_alltrack_spontaneous/track_1_spontaneous_1_170126_153637_lfp_100hz_alltrack_50compressed.ptcs'
+
+sua_filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_27_auditory_ephys_ophys/sort_alltrack_spontaneous/track_1_spontaneous_1_170127_172223_lfp_250hz_alltrack_50compressed.ptcs'
+#sua_filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_27_auditory_ephys_ophys/sort_alltrack_spontaneous/track_1_spontaneous_1_170127_172223_hp_butter_alltrack.ptcs'
+
 sort_sua =  PTCS.PTCS(sua_filename)
 print "... # units: ", len(sort_sua.units)
 
 
 #*********************** FIND BLUE LIGHT ON/OFF IN EPHYS *********************
-lfp_filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/sort_alltrack_spontaneous/track_1_spontaneous_1_170126_153637_lfp_100hz_alltrack.tsf'
+lfp_filename = sua_filename.replace('hp_butter_alltrack.ptcs', 'lfp_250hz_alltrack.tsf')
 
 ephys_epochs = find_ephys_epochs(lfp_filename, selected_epoch)
 
@@ -50,11 +61,9 @@ all_frametimes, all_imaging = set_frame_times(imaging_files, ephys_epochs, imagi
 print all_frametimes
 print all_imaging.shape
 
-
 #**************************************************************************************************
 #******************************   CAN LOOP UP TO HERE TO LOAD MULTIPLE IMAGING SESSIONS   *********
 #**************************************************************************************************
-
 
 #*********************** COMPUTE DF/F USING GLOBAL SIGNAL REGRESSION
 
@@ -68,143 +77,62 @@ dff_stack_blue = dff_mean(all_imaging, imaging_files, channel, selected_epoch)
 #********************** VERIFY MOVIES OF GREEN FLUORESCENCE ***********************
 
 if False: 
-    show_movies(dff_stack_green, dff_stack_blue)
+    show_dff_movies(dff_stack_green, dff_stack_blue, sua_filename)
 
 
 #*********************** FIND SPIKE TRIGGERED INDEXES **************************
 
-units = np.arange(30,31,1)
-units = [0]
-offset_frame_times = all_frametimes
+units = np.arange(0,sort_sua.n_units,1)
+#offset_frame_times = all_frametimes
+
 for unit in units:
-    print "... cell: ", unit
-    sta_map_indexes = []
-    for k in range(180):
-        sta_map_indexes.append([])
-
-    spikes = np.float32(sort_sua.units[unit])*1E-6 #/25000.
-    print "... no. spikes: ", len(spikes)
-    #indexes = np.where(np.logical_and(spikes>=offset_frame_times[0], spikes<=offset_frame_times[-1]))[0]
-    #spikes = spikes[indexes]
+    plotting = False
     
-    if len(spikes)==0: 
-        print "... no spikes..."
+    #Make green fluorescence map
+    green_sta, n_spikes = make_sta_maps(unit, selected_epoch, sort_sua, all_frametimes, dff_stack_green, sua_filename, plotting, 'green')
+
+    if n_spikes<100: 
+        print "... too few locking spikes..."
         continue
-    
-    frame_stack = []
-    dt = 0.0333         #Timewindow to search for nearest frame
-    #for spike in spikes[:1000]: #use only first 1000 spikes
-    #    nearest_frames = find_nearest_180(offset_frame_times, spike, dt)
-    #    frame_stack.append(nearest_frames)
-    
-    n_processes = 25
-    spikes = spikes[:2600]
-    
-    print "... finding frame indexes for # spikes: ", len(spikes)
-
-    frame_stack.append(parmap.map(find_nearest_180_parallel, spikes, offset_frame_times, dt, processes = n_processes))
-    
         
-    print "... done..."
-    frame_stack = np.vstack(frame_stack)
-    print frame_stack.shape
+    #Make blue light map
+    blue_sta, n_spikes = make_sta_maps(unit, selected_epoch, sort_sua, all_frametimes, dff_stack_blue, sua_filename, plotting, 'blue')
     
-    frame_stack = frame_stack.T
-
-    #********************** COMPUTE STA MAPS **********************
-
-    sta_array=[]
-    print "...plotting frames..."
-    for ctr,frames in enumerate(frame_stack):
-        #ax = plt.subplot(10,18,ctr+1)
-        frames_temp = []
-        for k in frames:
-            if k != None: 
-                frames_temp.append(k)
-        print "...frame: ", ctr, "  # of indexes: ", len(frames_temp)
-        temp_ave = np.mean(dff_stack_green[np.int32(frames_temp)],axis=0)
-        sta_array.append(temp_ave)
-    
-    
-    #************************ DEFINE ROI TO TRACK ***********************
-    path_dir, fname = os.path.split(sua_filename)
-    roi_coords = Define_roi(sta_array[92], path_dir)        #Use 92nd frame to draw brainmap;
-    print roi_coords[0], roi_coords[1]
-    
-    stmtd = []
-    for k in range(len(sta_array)):
-        stmtd.append(sta_array[k][roi_coords[0]][roi_coords[1]])
-
-    stmtd=np.array(stmtd)*100.
-    
-    
-    #******************** MASK AND AVERAGE DATA ***************
-    block_save=10
-    img_out = []
-    start = 0; length = 179
-    for i in range(start, start+length, block_save):
-        img_out.append(np.ma.average(sta_array[i:i+block_save], axis=0))
-    
-    midline_mask = 0
-    
-    path_dir = os.path.split(os.path.split(sua_filename)[0])[0]
-    img_out =  mask_data(img_out, path_dir, midline_mask)
-    
-    v_max = np.nanmax(np.abs(img_out)); v_min = -v_max
-    img_out = np.ma.hstack((img_out))
-    
-    #Make midline bar
-    img_out[:,len(img_out[1])/2-3:len(img_out[1])/2]=v_min
-    
-    
-    #********************* PLOTTING ***********************
-    fig = plt.figure()
-    ax=plt.subplot(211)
-
-
-    im = plt.imshow(img_out, vmin=v_min, vmax=v_max, cmap="jet")
-
-    #new_xlabel = np.arange(-3.0+start*0.033, -3.0+(start+length)*0.033, 0.5)
-    #old_xlabel = np.linspace(0, img_out.shape[1], 7)
-    #plt.xticks(old_xlabel, new_xlabel, fontsize=25)
-    
-    plt.xlabel("Time from spike (sec)", fontsize = 30)
-    ax.get_yaxis().set_visible(False)
-    ax.get_xaxis().set_visible(False)
-
-    
-    #Plot color bar
-    cbar = fig.colorbar(im, ticks = [v_min, 0, v_max], ax=ax, fraction=0.02, pad=0.05, aspect=3)
-    cbar.ax.set_yticklabels([str(round(v_min*100,1))+"%", '0'+"%", str(round(v_max*100,1))+"%"])  # vertically oriented colorbar
-    cbar.ax.tick_params(labelsize=15) 
-        
-    
-    ax=plt.subplot(212)
-    plt.plot(stmtd)
-    plt.plot([0, len(stmtd)], [0,0], 'r--')
-    plt.plot([int(len(stmtd)/2),int(len(stmtd)/2)], [-5,5], 'r--')
-    plt.ylim(np.min(stmtd), np.max(stmtd))
-    ax.tick_params(axis='both', which='major', labelsize=25)
-    plt.ylabel("DF/F (%)", fontsize=25)
-    
-    new_xlabel = np.arange(-3.0, 3.1, 1)
-    old_xlabel = np.linspace(0, len(stmtd), 7)
-    plt.xticks(old_xlabel, new_xlabel, fontsize=25)
-    plt.xlim(0, 180)
-    plt.xlabel("Time (sec)", fontsize=25)
-    
-    plt.suptitle("Cell: "+str(unit) + " # spikes: "+str(len(spikes))+"\nDF/F max: "+str(round(v_max*100,1))+"%", fontsize=30)
-    plt.show()
-        
-
-
-#for k in range(len(Y)):
-#    Y[k] = np.flipud(np.fliplr(Y[k]) )
-
-
+    show_movies(unit, selected_epoch, green_sta, blue_sta, sua_filename, n_spikes)
 
 
 quit()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 #***********GENERATE ANIMATIONS
