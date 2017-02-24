@@ -2,241 +2,112 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import struct, os, sys
-import matplotlib.animation as animation
-import matplotlib.gridspec as gridspec
-from tools import tsf_ptcs_classes as tsf_ptcs 
+
+#from tools import tsf_ptcs_classes as tsf_ptcs 
 
 sys.path.append('/home/cat/code/')
 import TSF.TSF as TSF
 import PTCS.PTCS as PTCS
 
+from picam_utils import *
+
+#**************************************************************************************
+
 colors = ['b','r', 'g', 'c','m','y','k','b','r']
+n_processes = 10
 
+selected_epoch = 1
 
-def find_nearest_180(array,value,dist):
-    return_stack = []
-    for k in range(-90,90,1):
-        index = np.abs(array-(value+(k*dist))).argmin()
-        if abs(array[index]-(value+(k*dist))) < dist:
-            return_stack.append(index)
-        else:
-            return_stack.append(None)
-
-        #print k, value+(k*dist), index, array[index], return_stack[k+90]
-    
-    return return_stack
-        
-#************************* LOAD SPIKING *****************************
-
-#ephys_filename= '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/ephys/track_1_spontaneous_1_170126_153637_hp.ptcs'
+#************************* LOAD SPIKING FOR SINGLE RECORDING OR WHOLE TRACK *****************************
 sua_filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/sort_alltrack_spontaneous/track_1_spontaneous_1_170126_153637_hp_butter_alltrack.ptcs'
-
-sort_sua =  tsf_ptcs.Ptcs(sua_filename)
-
+sort_sua =  PTCS.PTCS(sua_filename)
 print "... # units: ", len(sort_sua.units)
 
 
 #*********************** FIND BLUE LIGHT ON/OFF IN EPHYS *********************
-
 lfp_filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/sort_alltrack_spontaneous/track_1_spontaneous_1_170126_153637_lfp_100hz_alltrack.tsf'
 
-epoch_file = lfp_filename[:-4]+"_epochs.txt"
-if os.path.exists(epoch_file)==False: 
-
-    tsf = TSF.TSF(lfp_filename)
-    tsf.read_footer()
-
-    on_times = []
-    off_times = []
-    offset = 0
-
-    for f in range(tsf.n_files[0]):
-        #for k in range(tsf.n_digital_chs[f]):
-        k = 0 #Only first channel contains on/off lights for imaging camera
-        plt.plot(tsf.digital_chs[f][k][::10])
-
-        #Find transitions to on and off
-        for s in range(0, len(tsf.digital_chs[f][k])-25, 25):
-            if tsf.digital_chs[f][k][s]!=tsf.digital_chs[f][k][s+25]:
-                if tsf.digital_chs[f][k][s]==0: on_times.append(s+offset)
-                else: off_times.append(s+offset)
-        plt.show()
-        offset = offset + tsf.n_samples[f] #Must offset future times by recording time;
-        
-    epochs = []
-    for k in range(len(on_times)):
-        epochs.append([on_times[k], off_times[k]])
-    print epochs
-
-    np.savetxt(epoch_file, epochs, fmt='%i')
-
-else:
-    epochs = np.loadtxt(epoch_file)
+ephys_epochs = find_ephys_epochs(lfp_filename, selected_epoch)
 
 
 #*************************** LOAD LIST OF IMAGING FILES ******************
+alltrack_imaging_filenames = os.path.split(sua_filename)[0]+'/imaging_files.txt'
 
-imaging_filenames = os.path.split(sua_filename)[0]+'/imaging_files.txt'
-imaging_files = np.loadtxt(imaging_filenames, dtype=str)
-print imaging_files
-print imaging_files[0]
-
+imaging_files = np.loadtxt(alltrack_imaging_filenames, dtype=str)
 
 #*************************** FIND BLUE LIGHT ON/OFF IN IMAGING ********************
-root_dir = os.path.split(os.path.split(sua_filename)[0])[0]
 
-n_pixels = int(np.loadtxt(root_dir+'/n_pixels.txt'))
+#Load raw imaging data and save to .npy files; mmap on subsequent loads
+imaging_epoch = load_imaging_epochs(imaging_files, selected_epoch)
 
-#LOAD Imaging data
-imaging_epochs = []
-for filename in imaging_files:
-
-    if os.path.exists(filename[:-4]+".npy")==False:
-        stream = open(filename, 'rb')
-
-        #Y = np.fromfile(stream, dtype=np.uint8, count=width*height*frames*3).reshape((frames, height, width, 3))
-        Y = np.fromfile(stream, dtype=np.uint8).reshape((-1, n_pixels, n_pixels, 3))
-    
-        np.save(filename[:-4], Y)
-        
-        imaging_epochs.append(Y)
-    else:
-        imaging_epochs.append(np.load(filename[:-4]+'.npy', mmap_mode='c'))
+#Set blue light visually from imaing files; then save to imaging_onoff.txt; clip imaging periods also
+imaging_onoff, imaging_epochs = set_blue_light(imaging_files, imaging_epoch, selected_epoch)
 
 
-#Search imaging data for light on/off ************* FOR NOW MUST MANUALLY SET THESE ***************
+#****************** LOAD FRAME TIMES AND ASIGN TO IMAGING FRAMES ***************
+all_frametimes, all_imaging = set_frame_times(imaging_files, ephys_epochs, imaging_epochs, imaging_onoff, selected_epoch)
 
-imaging_onoff_file = os.path.split(sua_filename)[0]+'/imaging_onoff.txt'
-if os.path.exists(imaging_onoff_file)==False: 
-    for p in range(len(imaging_epochs)):
-        blue = imaging_epochs[p][:,64:65,50,1]
-        print blue.shape
-
-        lighton_trace = np.mean(blue, axis=1)
-
-else:
-    imaging_onoff = np.loadtxt(imaging_onoff_file, dtype=np.int32)
-
-print imaging_onoff
-#Clip all the imaging records to the on/off periods
-
-for e in range(len(imaging_epochs)):
-    print imaging_epochs[e].shape
-    imaging_epochs[e] = imaging_epochs[e][imaging_onoff[e][0]:imaging_onoff[e][1]]
-    
-    print imaging_epochs[e].shape, '\n'
-
-#Y = np.float32(Y)
-#on_off = [186,17217]
-#Y = Y[on_off[0]:on_off[1]]
-#for k in range(len(Y)):
-#    Y[k] = np.flipud(np.fliplr(Y[k]) )
-    
-#quit()
+print all_frametimes
+print all_imaging.shape
 
 
-#****************** LOAD FRAME TIMES ***************
-for imaging_file in imaging_files:
-    
-    frame_times = np.loadtxt(imaging_file+"_time.txt",dtype=str)
-    if frame_times[0]=="none":
-        pass
-    else:
-        frame_times = np.int64(frame_times)
-    print frame_times
+#**************************************************************************************************
+#******************************   CAN LOOP UP TO HERE TO LOAD MULTIPLE IMAGING SESSIONS   *********
+#**************************************************************************************************
 
-
-
-
-
-
-quit()
-
-
-
-
-
-
-epoch_file = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/ephys/track_1_spontaneous_1_170126_153637_epochs.txt'
-
-epochs = np.loadtxt(epoch_file)
-
-print epochs
-
-imaging_start_offset = epochs[0][0]
-
-
-
-#************************ MASK IMAGING DATA ***********************
-path_dir, filename = os.path.split(filename)
-tsf_ptcs.Define_generic_mask(Y, path_dir)
-
-
-
-#************************ LOAD FRAME TIMES *************************
-
-filename = '/media/cat/12TB/in_vivo/tim/cat/2017_01_26_barrel_ephys_ophys/imaging/track_1_spontaneous_1.raw_time.txt'
-frame_times = np.loadtxt(filename)*1E-6
-
-print frame_times
-print "... # frames: ", len(frame_times)
-
-offset_frame_times = frame_times[on_off[0]:on_off[1]]
-
-offset_frame_times = offset_frame_times -offset_frame_times[0]
-
-offset_frame_times = offset_frame_times+ imaging_start_offset
-
-print offset_frame_times
 
 #*********************** COMPUTE DF/F USING GLOBAL SIGNAL REGRESSION
 
-#Select only single channel
-data = Y[:,:,:,1]
+channel = 1
+dff_stack_green = dff_mean(all_imaging, imaging_files, channel, selected_epoch)
 
-if False:
-    data = np.divide(Y[:,:,:,1], Y[:,:,:,2])
+channel = 2
+dff_stack_blue = dff_mean(all_imaging, imaging_files, channel, selected_epoch)
 
 
-baseline = np.mean(data, axis=0)
-dff_stack_green = (data-baseline)/baseline
-    
+#********************** VERIFY MOVIES OF GREEN FLUORESCENCE ***********************
 
-print "...dff stack shape: ", dff_stack_green.shape
+if False: 
+    show_movies(dff_stack_green, dff_stack_blue)
 
 
 #*********************** FIND SPIKE TRIGGERED INDEXES **************************
 
-units = np.arange(48,73,1)
-
+units = np.arange(30,31,1)
+units = [0]
+offset_frame_times = all_frametimes
 for unit in units:
     print "... cell: ", unit
     sta_map_indexes = []
     for k in range(180):
         sta_map_indexes.append([])
 
-    frame_stack = []
-    spikes = np.float32(sort_sua.units[unit])/25000.
-    indexes = np.where(np.logical_and(spikes>=offset_frame_times[0], spikes<=offset_frame_times[-1]))[0]
-    spikes = spikes[indexes]
+    spikes = np.float32(sort_sua.units[unit])*1E-6 #/25000.
+    print "... no. spikes: ", len(spikes)
+    #indexes = np.where(np.logical_and(spikes>=offset_frame_times[0], spikes<=offset_frame_times[-1]))[0]
+    #spikes = spikes[indexes]
     
     if len(spikes)==0: 
         print "... no spikes..."
         continue
     
+    frame_stack = []
+    dt = 0.0333         #Timewindow to search for nearest frame
+    #for spike in spikes[:1000]: #use only first 1000 spikes
+    #    nearest_frames = find_nearest_180(offset_frame_times, spike, dt)
+    #    frame_stack.append(nearest_frames)
+    
+    n_processes = 25
+    spikes = spikes[:2600]
+    
     print "... finding frame indexes for # spikes: ", len(spikes)
-    for spike in spikes[:1000]: #use only first 1000 spikes
-        nearest_frames = find_nearest_180(offset_frame_times, spike, 0.0333)
-        #print nearest_frames
-        frame_stack.append(nearest_frames)
-        #print "... offset_frame_time: ", offset_frame_times[nearest_frame], "  spiketime: ", spike, "  found index: ", nearest_frame
-        
-        #quit()
+
+    frame_stack.append(parmap.map(find_nearest_180_parallel, spikes, offset_frame_times, dt, processes = n_processes))
+    
         
     print "... done..."
     frame_stack = np.vstack(frame_stack)
     print frame_stack.shape
-    print frame_stack[0]
     
     frame_stack = frame_stack.T
 
@@ -256,8 +127,8 @@ for unit in units:
     
     
     #************************ DEFINE ROI TO TRACK ***********************
-    path_dir, fname = os.path.split(filename)
-    roi_coords = tsf_ptcs.Define_roi(sta_array[92], path_dir)
+    path_dir, fname = os.path.split(sua_filename)
+    roi_coords = Define_roi(sta_array[92], path_dir)        #Use 92nd frame to draw brainmap;
     print roi_coords[0], roi_coords[1]
     
     stmtd = []
@@ -266,9 +137,8 @@ for unit in units:
 
     stmtd=np.array(stmtd)*100.
     
-    fig = plt.figure()
-
-    ax=plt.subplot(211)
+    
+    #******************** MASK AND AVERAGE DATA ***************
     block_save=10
     img_out = []
     start = 0; length = 179
@@ -277,8 +147,8 @@ for unit in units:
     
     midline_mask = 0
     
-    path_dir, fname = os.path.split(filename)
-    img_out =  tsf_ptcs.mask_data(img_out, path_dir, midline_mask)
+    path_dir = os.path.split(os.path.split(sua_filename)[0])[0]
+    img_out =  mask_data(img_out, path_dir, midline_mask)
     
     v_max = np.nanmax(np.abs(img_out)); v_min = -v_max
     img_out = np.ma.hstack((img_out))
@@ -286,6 +156,12 @@ for unit in units:
     #Make midline bar
     img_out[:,len(img_out[1])/2-3:len(img_out[1])/2]=v_min
     
+    
+    #********************* PLOTTING ***********************
+    fig = plt.figure()
+    ax=plt.subplot(211)
+
+
     im = plt.imshow(img_out, vmin=v_min, vmax=v_max, cmap="jet")
 
     #new_xlabel = np.arange(-3.0+start*0.033, -3.0+(start+length)*0.033, 0.5)
