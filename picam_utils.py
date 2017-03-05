@@ -56,6 +56,8 @@ def find_nearest_180_parallel(value, array, dist):
     return return_stack
 
 def find_ephys_epochs(P): #lfp_filename, selected_epoch):
+    ''' Function plots the digital channel input on/off signals and saves the on/off tyimes into a file "ephys_epochs.txt"
+    '''
     
     epoch_file = os.path.split(P.lfp_filename)[0]+"/ephys_epochs.txt"
     if os.path.exists(epoch_file)==False: 
@@ -69,7 +71,12 @@ def find_ephys_epochs(P): #lfp_filename, selected_epoch):
 
         for f in range(tsf.n_files[0]):
             #for k in range(tsf.n_digital_chs[f]):
-            k = 0 
+            
+            if P.imaging_type == 'gcamp':
+                k = 0   #New GCAMP recs; on/off light is in digital ch 0
+            else:
+                k = 1   #Older VSD recs; on/off light is in digital ch 1
+            
             plt.plot(tsf.digital_chs[f][k][::10])
 
             #Find transitions to on and off
@@ -170,12 +177,13 @@ def rotate_imaging(sta_array, sua_filename):
     
     
 
-def filter_imaging(P):
+def load_imaging(P):
     
     print "...loading imaging epochs..."
     root_dir = os.path.split(os.path.split(P.imaging_files[0])[0])[0]
     n_pixels = int(np.loadtxt(root_dir+'/n_pixels.txt'))
-
+    P.n_pixels = n_pixels
+    
     #LOAD Imaging data for specific epoch
     #for ctr, filename in enumerate(imaging_files):
     #    if ctr!=selected_epoch: continue
@@ -195,45 +203,47 @@ def filter_imaging(P):
     else:
         Y = np.load(filename[:-4]+'.npy', mmap_mode='c')
             
+    print "... loaded original data: ", Y.shape
     
-    ###LOAD MASK - filter only datapoints inside mask
-    #main_dir = os.path.split(os.path.split(sua_filename)[0])[0]
-    #generic_mask_file = main_dir + '/genericmask.txt' 
-    #if os.path.exists(generic_mask_file)==False:
-        #Define_generic_mask(np.array(data), main_dir)
-        
-    #generic_coords = np.loadtxt(generic_mask_file)
-    #generic_mask_indexes=np.zeros((n_pixels,n_pixels))
-    #for i in range(len(generic_coords)): 
-        #generic_mask_indexes[int(generic_coords[i][0])][int(generic_coords[i][1])] = True
+    ##**************** SELECT GREEN CHANNEL ONLY ********************
+    #if P.imaging_type == 'gcamp':
+        #Y = Y[:,:,:,1]     
     
+        #P.imaging_original = Y[:,::-1,::-1]
+    #else:
     
-    #**************** SELECT GREEN CHANNEL ONLY ********************
-    Y = Y[:,:,:,1]     
-    P.imaging_original = Y[:,::-1,::-1]
+    P.imaging_original = Y
 
+
+def filter_imaging(P):
+
+    print "... filtering stack ..."
+
+    Y = P.imaging_lighton
     
     #**************** COMPUTE MEAN OF STACK ************************
-    
-    if os.path.exists(filename[:-4]+"_epoch"+str(P.selected_epoch)+"_mean.npy")==False:
-        print "... computing imaging mean..."
+    filename = P.sua_filename
+    mean_filename = filename[:-5]+"_epoch"+str(P.selected_epoch)+"_mean"
+    if os.path.exists(mean_filename+'.npy')==False:
+        print "... first, computing imaging mean of stack: ", Y.shape
         Y_mean = np.mean(Y, axis=0)
         
-        np.save(filename[:-4]+"_epoch"+str(P.selected_epoch)+"_mean", Y_mean)
+        np.save(mean_filename, Y_mean)
+    
     else:
-        
-        Y_mean = np.load(filename[:-4]+"_epoch"+str(P.selected_epoch)+"_mean.npy")
+        Y_mean = np.load(mean_filename+".npy")
         
     
     #****************** FILTER *********************************
-    if os.path.exists(filename[:-4]+"_green_filtered.npy")==False:
+    filtered_filename = P.imaging_files[P.selected_epoch][:-4]+"_green_filtered"
+
+    if os.path.exists(filtered_filename + ".npy")==False:
         
         filtered_stack=[]
         
-        print "... making filters, and lists of pixels..."
         cutoff = 0.1
         order = 4
-        SampleFrequency = 30
+        SampleFrequency = np.loadtxt(P.main_dir+'/img_rate.txt')
         temp_traces = []
 
         nyq = 0.5 * SampleFrequency
@@ -243,8 +253,8 @@ def filter_imaging(P):
         print Y.shape
         
         pixel_array = []
-        for i in range(n_pixels):
-            for j in range(n_pixels):
+        for i in range(P.n_pixels):
+            for j in range(P.n_pixels):
                 pixel_array.append(Y[:,i,j])
         
         #Use parmap
@@ -257,22 +267,23 @@ def filter_imaging(P):
         print "... reconstructing data ..."
         ctr=0
         Y_filtered = np.zeros(Y.shape, dtype=np.float32)
-        for p1 in range(n_pixels):
+        for p1 in range(P.n_pixels):
             print "...row: ", p1
-            for p2 in range(n_pixels):
+            for p2 in range(P.n_pixels):
                 #if generic_mask_indexes[p1,p2]==False:
                 Y_filtered[:,p1,p2] = filtered_pixels[ctr]; ctr+=1
         
         print "...  saving data..."
-        np.save(filename[:-4]+'_green_filtered', Y_filtered)
+        np.save(filtered_filename, Y_filtered)
 
 
+    Y_lighton_filtered = np.load(filtered_filename+'.npy', mmap_mode='c')
+    if P.imaging_type == 'gcamp':
+        Y_lighton_filtered = Y_lighton_filtered[:,::-1,::-1]        #Need to invert/flip 2017 experiments 
+    
+    
+    P.imaging_filtered_lighton = Y_lighton_filtered
 
-    else:
-        
-        Y_filtered = np.load(filename[:-4]+'_green_filtered.npy', mmap_mode='c')
-
-    P.imaging_filtered = Y_filtered[:,::-1,::-1]     #THIS INVERTS THE DATA; IT IS SAVED RIGHT SIDE UP THOUGH
     #return Y_filtered[:,::-1,::-1]     #THIS INVERTS THE DATA; IT IS SAVED RIGHT SIDE UP THOUGH
 
            
@@ -281,35 +292,45 @@ def do_filter(pixel, b, a):
 
 
 
-def set_blue_light(P, imaging_epoch):
+def set_lighton(P):
     print "...setting blue light..."
   
     root_dir = os.path.split(os.path.split(P.imaging_files[P.selected_epoch])[0])[0]
     n_pixels = int(np.loadtxt(root_dir+'/n_pixels.txt'))
     imaging_onoff_file = P.imaging_files[P.selected_epoch][:-4]+'_imaging_onoff.txt'        #This sets the imaging_onoff for each recording in the track
 
+    Y = np.load(P.imaging_files[P.selected_epoch][:-4]+'.npy', mmap_mode='c')
+    if P.imaging_type == 'gcamp':
+        Y = Y[:,:,:,1]        #Picam recording; pick green channel
+
     if os.path.exists(imaging_onoff_file)==False: 
+        print Y.shape
+               
+        if P.imaging_type == 'gcamp': 
         
-        Y = np.load(P.imaging_files[P.selected_epoch][:-4]+'.npy', mmap_mode='c')
-        
-        imaging_epoch = Y[:,:,:,1]     
-        
-        #intensity = np.mean(imaging_epoch[:1000].reshape(1000,65536), axis=1)
-        #plt.plot(intensity)
-        #plt.show()
+            blue = Y[:,int(n_pixels/2):int(n_pixels/2)+1,:]
+            print "... computing mean of imaging rows: ", blue.shape
+            
+            #plt.imshow(Y[10000], vmin=, vmax= interpolation='none')
+            #plt.show()
+            
+            lighton_trace = np.mean(blue, axis=0)
 
-        blue = imaging_epoch[:,int(n_pixels/2):int(n_pixels/2)+1,n_pixels/2]
-        
-        lighton_trace = np.mean(blue, axis=1)
+            print ">>>>> make file: \n\n", imaging_onoff_file, "\n\n  <<<<<  and SAVE ONOFF TIMES"
 
-        print ">>>>> make file: \n\n", imaging_onoff_file, "\n\n  <<<<<  and SAVE ONOFF TIMES"
+            plt.plot(lighton_trace)
+            plt.show()
 
-        plt.plot(lighton_trace)
-        plt.show()
+        else:
+            #********** MAY NEED THIS FOR VSD DATA - to reshape back to 3D stacks
+            #Y = Y.reshape(-1, 128,128)         
+            #np.save(P.imaging_files[P.selected_epoch][:-4]+'_reshaped.npy', Y)
+            #quit()
 
+            np.savetxt(imaging_onoff_file, [0, len(Y)])
+    
     P.imaging_onoff = np.loadtxt(imaging_onoff_file, dtype=np.int32)
-
-    P.imaging_filtered_lighton = imaging_epoch[P.imaging_onoff[0]:P.imaging_onoff[1]]
+    P.imaging_lighton = Y[P.imaging_onoff[0]:P.imaging_onoff[1]]
 
     #return imaging_onoff, imaging_epoch
     
@@ -345,78 +366,77 @@ def make_stack_parallel(frames, dff_stack):
 
 
 
-def set_frame_times(P, imaging_epochs, imaging_onoff):
+def set_frame_times(P):
     ''' Clip imaging stack to match on/off times of light
     '''
+    
+    imaging_onoff = P.imaging_onoff
         
     print "...setting frame times..."
 
-    frame_times = []
-    imaging_file = P.imaging_files[P.selected_epoch]
-    temp_times = np.loadtxt(imaging_file+"_time.txt",dtype=str)
-    if temp_times[0]=="None":
-        frame_times= np.int64(temp_times[1:])
-    else:
-        frame_times = np.int64(temp_times)
-    
-    print frame_times, len(frame_times)
-    print imaging_onoff
-    print P.ephys_epochs
-
-    #***************** ASIGN REAL TIME TO IMAGING FRAMES ******************
-    all_frametimes = []
-    all_imaging = []
-
-    print "* Rec epoch: ", P.selected_epoch
-    print "... start ephys: ", P.ephys_epochs[0]/25000.
-    print "... duration ephys: ", (P.ephys_epochs[1]-P.ephys_epochs[0])/25000.
-
-    #Check if recording light was properly turned off
-    if (imaging_onoff[1] - imaging_onoff[0])<=0:
-        print " ****************** error in imaging ****************** \n"
-        return
-
-    temp_frametimes = frame_times[imaging_onoff[0]:imaging_onoff[1]]       #Clip frame times to on/off of light
-    temp_frametimes = temp_frametimes - temp_frametimes[0]                          #Offset all imgframes to zero start
-    temp_frametimes = temp_frametimes*1E-6                                          #Convert frametimes to seconds
-    temp_frametimes = temp_frametimes+P.ephys_epochs[0]/25000.                     #Offset imgtimes to ephys trigger
-
-    print "... # img frames: ", len(temp_frametimes)
-    print "... duration imaging: ", (temp_frametimes[-1]-temp_frametimes[0])
-    print "... frametimes: ", temp_frametimes
-    
-    #print "missed frames: ", (ephys_epochs[k][1]-ephys_epochs[k][0])/25000.*30 - len(temp_frametimes)
-
-    print '\n'
-
-    all_frametimes.extend(temp_frametimes)
-    #all_imaging.append(imaging_epochs[k])
-    all_imaging = imaging_epochs
-
-    #Save frametimes for each image and imaging frames at the same time:
-    all_frametimes = np.float32(all_frametimes)
-    #if os.path.exists(imaging_files[0][:-4]+"_allimaging_frametimes.txt")==False:              #NOT NECESSARY TO SAVE THIS, It's already fast.
-    #    np.savetxt(imaging_files[0][:-4]+"_allimaging_frametimes.txt", all_frametimes)
-
-    if True:        #Don't save single epoch imaging again to file - may wish to implement if multiple 
-        pass
-    else:
-        all_imaging_npy_file = P.imaging_files[0][:-4]+"_allimaging"
-
-        if os.path.exists(all_imaging_npy_file+'.npy')==False:
-            all_imaging = np.vstack(all_imaging)
-            np.save(all_imaging_npy_file, all_imaging)
+    #********************************** PICAM acquired data is missing frames; must process accordingly ******************
+    if P.imaging_type == 'gcamp':            
+        frame_times = []
+        imaging_file = P.imaging_files[P.selected_epoch]
+        temp_times = np.loadtxt(imaging_file+"_time.txt",dtype=str)
+        if temp_times[0]=="None":
+            frame_times= np.int64(temp_times[1:])
         else:
-            all_imaging = np.load(all_imaging_npy_file+'.npy', mmap_mode='c')
+            frame_times = np.int64(temp_times)
+        
+        print frame_times, len(frame_times)
+        print imaging_onoff
+        print P.ephys_epochs
 
-    print all_imaging.shape
-    print len(all_frametimes)
+        #***************** ASIGN REAL TIME TO IMAGING FRAMES ******************
+        all_frametimes = []
+
+        print "* Rec epoch: ", P.selected_epoch
+        print "... start ephys: ", P.ephys_epochs[0]/25000.
+        print "... duration ephys: ", (P.ephys_epochs[1]-P.ephys_epochs[0])/25000.
+
+        #Check if recording light was properly turned off
+        if (imaging_onoff[1] - imaging_onoff[0])<=0:
+            print " ****************** error in imaging ****************** \n"
+            return
+
+        temp_frametimes = frame_times[imaging_onoff[0]:imaging_onoff[1]]       #Clip frame times to on/off of light
+        temp_frametimes = temp_frametimes - temp_frametimes[0]                          #Offset all imgframes to zero start
+        temp_frametimes = temp_frametimes*1E-6                                          #Convert frametimes to seconds
+        temp_frametimes = temp_frametimes+P.ephys_epochs[0]/25000.                     #Offset imgtimes to ephys trigger
+
+        print "... # img frames: ", len(temp_frametimes)
+        print "... duration imaging: ", (temp_frametimes[-1]-temp_frametimes[0])
+        print "... frametimes: ", temp_frametimes
+        
+        #print "missed frames: ", (ephys_epochs[k][1]-ephys_epochs[k][0])/25000.*30 - len(temp_frametimes)
+
+        print '\n'
+
+        all_frametimes.extend(temp_frametimes)
+
+        #Save frametimes for each image and imaging frames at the same time:
+        all_frametimes = np.float32(all_frametimes)
+
+
+
+    #******************************* VSD Data acquired on DALSA *********************
+    else:
+        
+        
+        print ".... VSD FRAMTIMES MAY BE DIFFERENT FOR DIFF RECORDINGS <<<<<<<<<<<<<<<<<<<<<<<< CHECK THIS...."
+        
+        all_frametimes = np.linspace(P.ephys_epochs[0]/25000., P.ephys_epochs[1]/25000., P.imaging_filtered_lighton.shape[0])
+        
+
+    #Print results
+
     print all_frametimes
 
     P.all_frame_times = all_frametimes
-    P.imaging_filtered_lighton = all_imaging
+    #P.imaging_filtered_lighton = all_imaging
 
-    P.imaging = all_imaging
+    P.imaging = P.imaging_filtered_lighton
     #return all_frametimes, all_imaging
 
 
@@ -433,53 +453,20 @@ def dff_mean(P):
     if os.path.exists(stack_dff_filename+'.npy')==False:
         
         print "...loading mean..."
-        baseline = np.load(P.imaging_files[P.selected_epoch][:-4]+"_epoch"+str(P.selected_epoch)+"_mean.npy")
+        baseline = np.load(P.sua_filename[:-5]+"_epoch"+str(P.selected_epoch)+"_mean.npy")
         
         #baseline = np.mean(np.float32(imaging), axis=0)
         #baseline = np.float32(baseline)
         print baseline.shape
         print baseline[64]
-        #plt.imshow(baseline)
-        #plt.show()
-     
-        ##Compute division in parallel
-        #if False: 
-            #all_imaging_list = []
-            #list_indexes = np.int32(np.linspace(0, len(imaging), n_processes+1))
-            #print list_indexes
-            #for k in range(len(list_indexes[:-1])):                                             #**** DON"T NEED TO DO MAKE LIST FOR PARMAP ****
-                #all_imaging_list.append(imaging[list_indexes[k]:list_indexes[k+1]])
-                
-            #print "...computing division..."
 
-            #dff_stack=[]
-            #dff_stack.extend(parmap.map(parallel_divide, all_imaging_list, baseline, processes = n_processes))
-            #print "...len parallel list: ", len(dff_stack)
-        
-            #dff_stack = np.vstack(dff_stack)
-            #print dff_stack.shape
-
-        #else:
             
         dff_stack = np.zeros(P.imaging.shape, dtype=np.float32)
         for k in range(len(P.imaging)):
             print "...dividing frame: ", k
             #dff_stack[k]=np.divide(imaging[k]-baseline, baseline)
-            dff_stack[k]=np.divide(P.imaging[k], baseline)
-            
-            #if k%10==0:
-                #ax = plt.subplot(1,2,1)
-                #plt.imshow(imaging[k])
-                #print baseline[64]
-                #print imaging[k][64]
-
-                #print dff_stack[k][64]
-
-                #ax = plt.subplot(1,2,2)
-                #plt.imshow(dff_stack[k], vmin=-0.15, vmax = 0.15)
-                
-                #plt.show()
-    
+            dff_stack[k]=np.divide(P.imaging[k], baseline)              #IF DATA Filtered - DO NOT Substract baseline
+  
         np.save(stack_dff_filename, dff_stack)
 
     dff_stack = np.load(stack_dff_filename+'.npy', mmap_mode='c')
@@ -576,6 +563,10 @@ def on_click_roi(event):
         fig.canvas.mpl_disconnect(cid)
         
 def Define_roi(images_processed, P):
+    
+    print "... defining ROIs to track ... "
+
+    Define_generic_mask(images_processed, P)
 
     global coords, images_temp, ax, fig, cid, P_temp
     
@@ -613,7 +604,7 @@ def mask_data(data, P):
     
     # main_dir, midline_mask, sua_filename, P):
     
-    n_pixels = len(data[0])
+    n_pixels = P.n_pixels
 
     main_dir = os.path.split(os.path.split(P.sua_filename)[0])[0]
     
@@ -648,6 +639,10 @@ def mask_data(data, P):
                 for l in range(7):
                     generic_mask_indexes[min(n_pix,int(coords[j][0])-1+k)][min(n_pix,int(coords[j][1])-1+l)]=-0.25
       
+        #Load midline mask
+        for i in range(P.midline_mask):
+            generic_mask_indexes[:,n_pixels/2+int(P.midline_mask/2)-i]=True        
+              
         plt.imshow(generic_mask_indexes)
         plt.show()
     
@@ -680,6 +675,8 @@ def on_click(event):
 
        
 def Define_generic_mask(images_processed, P):
+
+    print "... defining generic mask ..."
 
     global coords, img_out, ax, fig, cid, P_temp
     
