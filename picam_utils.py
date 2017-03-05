@@ -10,6 +10,11 @@ from matplotlib.path import Path
 import scipy
 import scipy.ndimage
 import scipy.signal
+from mpl_toolkits.mplot3d import axes3d
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.patches as mpatches
 
 import skimage
 from skimage import data
@@ -50,11 +55,12 @@ def find_nearest_180_parallel(value, array, dist):
     
     return return_stack
 
-def find_ephys_epochs(lfp_filename, selected_epoch):
-    epoch_file = os.path.split(lfp_filename)[0]+"/ephys_epochs.txt"
+def find_ephys_epochs(P): #lfp_filename, selected_epoch):
+    
+    epoch_file = os.path.split(P.lfp_filename)[0]+"/ephys_epochs.txt"
     if os.path.exists(epoch_file)==False: 
 
-        tsf = TSF.TSF(lfp_filename)
+        tsf = TSF.TSF(P.lfp_filename)
         tsf.read_footer()
 
         on_times = []
@@ -84,19 +90,17 @@ def find_ephys_epochs(lfp_filename, selected_epoch):
     else:
         ephys_epochs = np.loadtxt(epoch_file)
         
-    return ephys_epochs[selected_epoch]
+    return ephys_epochs[P.selected_epoch]
 
-def rotate_imaging(unit, sta_array, sua_filename):
+def rotate_imaging(sta_array, sua_filename):
     
     root_dir = os.path.split(os.path.split(sua_filename)[0])[0]
     n_pixels = int(np.loadtxt(root_dir+'/n_pixels.txt'))
+    
     image_shift_file = sua_filename[:-5]+"_image_shift.txt"
 
-    #rotated_imaging_file = sua_filename[:-5]+"_unit"+str(unit)+"_rotated.npy"
+    sta_copy = np.float64(sta_array.copy())
 
-    sta_copy = sta_array.copy()
-
-    #if os.path.exists(rotated_imaging_file)==False:
     #Recenter/shift images:
     
     print "Rotating images"
@@ -112,38 +116,47 @@ def rotate_imaging(unit, sta_array, sua_filename):
     print x_shift, y_shift, angle
     
     #*******************SHIFT IMAGE******************
-    
-    sta_array = np.float64(sta_array)
-    
-    #ax = plt.subplot(221)
-    #plt.imshow(sta_copy[90])
+   
+    if False: 
 
-    #ax = plt.subplot(222)
-    #plot_2 = np.roll(sta_copy[90], y_shift, axis=0)
-    #plot_2[n_pixels/2] = 0
-    #plot_2[:, n_pixels/2] = 0
-    #plt.imshow(plot_2)
-    
-    #ax = plt.subplot(223)
-    #plot_3 = np.roll(sta_copy[90], x_shift, axis=1)
-    #plot_3 = np.roll(plot_3, y_shift, axis=0)
-    #plot_3[n_pixels/2] = 0
-    #plot_3[:, n_pixels/2] = 0
-    #plt.imshow(plot_3)
-    
-    #ax = plt.subplot(224)
-    #plot_4 = skimage.transform.rotate(sta_copy[90], angle)#, mode='constant', cval=100)
-    #plot_4 = np.roll(plot_4, x_shift, axis=1)
-    #plot_4 = np.roll(plot_4, y_shift, axis=0)
-    #plot_4[n_pixels/2] = 0
-    #plot_4[:, n_pixels/2] = 0
-    #plt.imshow(plot_4)
 
-    #plt.show()
+        midline_mask = 0
+        main_dir = os.path.split(os.path.split(sua_filename)[0])[0]
+        sta_copy = mask_data(sta_copy, main_dir, midline_mask, sua_filename)
+        sta_copy = np.float64(sta_copy)
+
+        ax = plt.subplot(221)
+        plt.imshow(sta_copy[90], vmin = -0.10, vmax=0.10)
+
+        ax = plt.subplot(222)
+        plot_2 = np.roll(sta_copy[90], y_shift, axis=0)
+        plot_2[n_pixels/2] = 0
+        plot_2[:, n_pixels/2] = 0
+        plt.imshow(plot_2, vmin = -0.10, vmax=0.10)
+        
+        ax = plt.subplot(223)
+        plot_3 = np.roll(sta_copy[90], x_shift, axis=1)
+        plot_3 = np.roll(plot_3, y_shift, axis=0)
+        plot_3[n_pixels/2] = 0
+        plot_3[:, n_pixels/2] = 0
+        plt.imshow(plot_3, vmin = -0.10, vmax=0.10)
+        
+        ax = plt.subplot(224)
+        plot_4 = skimage.transform.rotate(sta_copy[90], angle)#, mode='constant', cval=100)
+        plot_4 = np.roll(plot_4, x_shift, axis=1)
+        plot_4 = np.roll(plot_4, y_shift, axis=0)
+        plot_4[n_pixels/2] = 0
+        plot_4[:, n_pixels/2] = 0
+        plt.imshow(plot_4, vmin = -0.10, vmax=0.10)
+
+        plt.show()
 
 
     #*******************ROTATE IMAGE********************
     print "Rotate angle: ", angle
+    
+    sta_array = np.float64(sta_array)
+
     if angle != 0:
 
         for i in range(len(sta_copy)):
@@ -157,16 +170,16 @@ def rotate_imaging(unit, sta_array, sua_filename):
     
     
 
-def filter_imaging(imaging_files, selected_epoch, sua_filename, n_processes):
+def filter_imaging(P):
     
     print "...loading imaging epochs..."
-    root_dir = os.path.split(os.path.split(imaging_files[0])[0])[0]
+    root_dir = os.path.split(os.path.split(P.imaging_files[0])[0])[0]
     n_pixels = int(np.loadtxt(root_dir+'/n_pixels.txt'))
 
     #LOAD Imaging data for specific epoch
     #for ctr, filename in enumerate(imaging_files):
     #    if ctr!=selected_epoch: continue
-    filename = imaging_files[selected_epoch]
+    filename = P.imaging_files[P.selected_epoch]
     if os.path.exists(filename[:-4]+".npy")==False:
         
         print "... npy files do not exist: making and saving..."
@@ -197,18 +210,19 @@ def filter_imaging(imaging_files, selected_epoch, sua_filename, n_processes):
     
     #**************** SELECT GREEN CHANNEL ONLY ********************
     Y = Y[:,:,:,1]     
-    
+    P.imaging_original = Y[:,::-1,::-1]
+
     
     #**************** COMPUTE MEAN OF STACK ************************
     
-    if os.path.exists(filename[:-4]+"_epoch"+str(selected_epoch)+"_mean.npy")==False:
+    if os.path.exists(filename[:-4]+"_epoch"+str(P.selected_epoch)+"_mean.npy")==False:
         print "... computing imaging mean..."
         Y_mean = np.mean(Y, axis=0)
         
-        np.save(filename[:-4]+"_epoch"+str(selected_epoch)+"_mean", Y_mean)
+        np.save(filename[:-4]+"_epoch"+str(P.selected_epoch)+"_mean", Y_mean)
     else:
         
-        Y_mean = np.load(filename[:-4]+"_epoch"+str(selected_epoch)+"_mean.npy")
+        Y_mean = np.load(filename[:-4]+"_epoch"+str(P.selected_epoch)+"_mean.npy")
         
     
     #****************** FILTER *********************************
@@ -237,7 +251,7 @@ def filter_imaging(imaging_files, selected_epoch, sua_filename, n_processes):
         import parmap
         
         print "... highpass filtering data (parallel version)..."
-        filtered_pixels = parmap.map(do_filter, pixel_array, b, a, processes=n_processes)
+        filtered_pixels = parmap.map(do_filter, pixel_array, b, a, processes=P.n_processes)
         
 
         print "... reconstructing data ..."
@@ -258,8 +272,8 @@ def filter_imaging(imaging_files, selected_epoch, sua_filename, n_processes):
         
         Y_filtered = np.load(filename[:-4]+'_green_filtered.npy', mmap_mode='c')
 
-
-    return Y_filtered[:,::-1,::-1]     #THIS INVERTS THE DATA; IT IS SAVED RIGHT SIDE UP THOUGH
+    P.imaging_filtered = Y_filtered[:,::-1,::-1]     #THIS INVERTS THE DATA; IT IS SAVED RIGHT SIDE UP THOUGH
+    #return Y_filtered[:,::-1,::-1]     #THIS INVERTS THE DATA; IT IS SAVED RIGHT SIDE UP THOUGH
 
            
 def do_filter(pixel, b, a):
@@ -267,16 +281,16 @@ def do_filter(pixel, b, a):
 
 
 
-def set_blue_light(imaging_files, imaging_epoch, selected_epoch):
+def set_blue_light(P, imaging_epoch):
     print "...setting blue light..."
   
-    root_dir = os.path.split(os.path.split(imaging_files[selected_epoch])[0])[0]
+    root_dir = os.path.split(os.path.split(P.imaging_files[P.selected_epoch])[0])[0]
     n_pixels = int(np.loadtxt(root_dir+'/n_pixels.txt'))
-    imaging_onoff_file = imaging_files[selected_epoch][:-4]+'_imaging_onoff.txt'        #This sets the imaging_onoff for each recording in the track
+    imaging_onoff_file = P.imaging_files[P.selected_epoch][:-4]+'_imaging_onoff.txt'        #This sets the imaging_onoff for each recording in the track
 
     if os.path.exists(imaging_onoff_file)==False: 
         
-        Y = np.load(imaging_files[selected_epoch][:-4]+'.npy', mmap_mode='c')
+        Y = np.load(P.imaging_files[P.selected_epoch][:-4]+'.npy', mmap_mode='c')
         
         imaging_epoch = Y[:,:,:,1]     
         
@@ -284,7 +298,7 @@ def set_blue_light(imaging_files, imaging_epoch, selected_epoch):
         #plt.plot(intensity)
         #plt.show()
 
-        blue = imaging_epoch[:,int(n_pixels/2):int(n_pixels/2)+1,128]
+        blue = imaging_epoch[:,int(n_pixels/2):int(n_pixels/2)+1,n_pixels/2]
         
         lighton_trace = np.mean(blue, axis=1)
 
@@ -293,13 +307,11 @@ def set_blue_light(imaging_files, imaging_epoch, selected_epoch):
         plt.plot(lighton_trace)
         plt.show()
 
-    else:
-        imaging_onoff = np.loadtxt(imaging_onoff_file, dtype=np.int32)
+    P.imaging_onoff = np.loadtxt(imaging_onoff_file, dtype=np.int32)
 
+    P.imaging_filtered_lighton = imaging_epoch[P.imaging_onoff[0]:P.imaging_onoff[1]]
 
-    imaging_epoch = imaging_epoch[imaging_onoff[0]:imaging_onoff[1]]
-
-    return imaging_onoff, imaging_epoch
+    #return imaging_onoff, imaging_epoch
     
 
 def make_stack_parallel(frames, dff_stack):
@@ -333,15 +345,14 @@ def make_stack_parallel(frames, dff_stack):
 
 
 
-def set_frame_times(imaging_files, ephys_epochs, imaging_epochs, imaging_onoff, selected_epoch):
+def set_frame_times(P, imaging_epochs, imaging_onoff):
     ''' Clip imaging stack to match on/off times of light
     '''
-    
-    
+        
     print "...setting frame times..."
 
     frame_times = []
-    imaging_file = imaging_files[selected_epoch]
+    imaging_file = P.imaging_files[P.selected_epoch]
     temp_times = np.loadtxt(imaging_file+"_time.txt",dtype=str)
     if temp_times[0]=="None":
         frame_times= np.int64(temp_times[1:])
@@ -350,15 +361,15 @@ def set_frame_times(imaging_files, ephys_epochs, imaging_epochs, imaging_onoff, 
     
     print frame_times, len(frame_times)
     print imaging_onoff
-    print ephys_epochs
+    print P.ephys_epochs
 
     #***************** ASIGN REAL TIME TO IMAGING FRAMES ******************
     all_frametimes = []
     all_imaging = []
 
-    print "* Rec epoch: ", selected_epoch
-    print "... start ephys: ", ephys_epochs[0]/25000.
-    print "... duration ephys: ", (ephys_epochs[1]-ephys_epochs[0])/25000.
+    print "* Rec epoch: ", P.selected_epoch
+    print "... start ephys: ", P.ephys_epochs[0]/25000.
+    print "... duration ephys: ", (P.ephys_epochs[1]-P.ephys_epochs[0])/25000.
 
     #Check if recording light was properly turned off
     if (imaging_onoff[1] - imaging_onoff[0])<=0:
@@ -368,7 +379,7 @@ def set_frame_times(imaging_files, ephys_epochs, imaging_epochs, imaging_onoff, 
     temp_frametimes = frame_times[imaging_onoff[0]:imaging_onoff[1]]       #Clip frame times to on/off of light
     temp_frametimes = temp_frametimes - temp_frametimes[0]                          #Offset all imgframes to zero start
     temp_frametimes = temp_frametimes*1E-6                                          #Convert frametimes to seconds
-    temp_frametimes = temp_frametimes+ephys_epochs[0]/25000.                     #Offset imgtimes to ephys trigger
+    temp_frametimes = temp_frametimes+P.ephys_epochs[0]/25000.                     #Offset imgtimes to ephys trigger
 
     print "... # img frames: ", len(temp_frametimes)
     print "... duration imaging: ", (temp_frametimes[-1]-temp_frametimes[0])
@@ -390,7 +401,7 @@ def set_frame_times(imaging_files, ephys_epochs, imaging_epochs, imaging_onoff, 
     if True:        #Don't save single epoch imaging again to file - may wish to implement if multiple 
         pass
     else:
-        all_imaging_npy_file = imaging_files[0][:-4]+"_allimaging"
+        all_imaging_npy_file = P.imaging_files[0][:-4]+"_allimaging"
 
         if os.path.exists(all_imaging_npy_file+'.npy')==False:
             all_imaging = np.vstack(all_imaging)
@@ -402,12 +413,15 @@ def set_frame_times(imaging_files, ephys_epochs, imaging_epochs, imaging_onoff, 
     print len(all_frametimes)
     print all_frametimes
 
+    P.all_frame_times = all_frametimes
+    P.imaging_filtered_lighton = all_imaging
 
-    return all_frametimes, all_imaging
+    P.imaging = all_imaging
+    #return all_frametimes, all_imaging
 
 
 
-def dff_mean(imaging, imaging_files, selected_epoch, n_processes):
+def dff_mean(P):
     
     print "...computing dff..."
 
@@ -415,11 +429,11 @@ def dff_mean(imaging, imaging_files, selected_epoch, n_processes):
     #************** MAKE GREEN CHANNEL
     #imaging = all_imaging[:,:,:,channel]    #Flip UP-DOWN and LEFT-RIGHT while also selecting only Green channel
 
-    stack_dff_filename = imaging_files[selected_epoch][:-4]+"_green_dffmean"
+    stack_dff_filename = P.imaging_files[P.selected_epoch][:-4]+"_green_dffmean"
     if os.path.exists(stack_dff_filename+'.npy')==False:
         
         print "...loading mean..."
-        baseline = np.load(imaging_files[selected_epoch][:-4]+"_epoch"+str(selected_epoch)+"_mean.npy")
+        baseline = np.load(P.imaging_files[P.selected_epoch][:-4]+"_epoch"+str(P.selected_epoch)+"_mean.npy")
         
         #baseline = np.mean(np.float32(imaging), axis=0)
         #baseline = np.float32(baseline)
@@ -447,11 +461,11 @@ def dff_mean(imaging, imaging_files, selected_epoch, n_processes):
 
         #else:
             
-        dff_stack = np.zeros(imaging.shape, dtype=np.float32)
-        for k in range(len(imaging)):
+        dff_stack = np.zeros(P.imaging.shape, dtype=np.float32)
+        for k in range(len(P.imaging)):
             print "...dividing frame: ", k
             #dff_stack[k]=np.divide(imaging[k]-baseline, baseline)
-            dff_stack[k]=np.divide(imaging[k], baseline)
+            dff_stack[k]=np.divide(P.imaging[k], baseline)
             
             #if k%10==0:
                 #ax = plt.subplot(1,2,1)
@@ -470,22 +484,25 @@ def dff_mean(imaging, imaging_files, selected_epoch, n_processes):
 
     dff_stack = np.load(stack_dff_filename+'.npy', mmap_mode='c')
     print dff_stack.shape
-
-    return dff_stack
+    
+    P.dff_stack_green = dff_stack
+    P.dff_stack = dff_stack
+    
+    #return dff_stack
 
 
 
 def show_dff_movies(dff_stack_green, sua_filename):
 
     
-    midline_mask = 0
+    midline_mask = P.P.midline_mask
     main_dir = os.path.split(os.path.split(sua_filename)[0])[0]
 
     #temp_stack = dff_stack_green[50000:51000]
     temp_stack = dff_stack_green[:1000]
     temp_stack = (temp_stack - np.mean(temp_stack))/np.mean(temp_stack)
 
-    dff_stack_green = mask_data(temp_stack, main_dir, midline_mask)
+    dff_stack_green = mask_data(temp_stack, main_dir, midline_mask, sua_filename, P)
     #dff_stack_blue = mask_data(dff_stack_blue[:1000], main_dir, midline_mask)
     
     fig = plt.figure()
@@ -539,18 +556,18 @@ def show_dff_movies(dff_stack_green, sua_filename):
                
 def on_click_roi(event):
     
-    global coords, images_temp, ax, fig, cid
+    global coords, images_temp, ax, fig, cid, P_temp
     
-    n_pix = len(images_temp)
+    n_pix = len(images_temp[0])
     
     if event.inaxes is not None:
         coords.append((event.ydata, event.xdata))
         for j in range(len(coords)):
-            for k in range(3):
-                for l in range(3):
-                    images_temp[0][min(n_pix,int(coords[j][0])-1+k)][min(n_pix,int(coords[j][1])-1+l)]=0
+            for k in range(7):
+                for l in range(7):
+                    images_temp[int(len(images_temp)/2)][min(n_pix,int(coords[j][0])-1+k)][min(n_pix,int(coords[j][1])-1+l)]=-0.25
 
-        ax.imshow(images_temp, vmin=-.25, vmax=.25)
+        ax.imshow(images_temp[int(len(images_temp)/2)], vmin=-.25, vmax=.25, cmap = P_temp.color_scheme)
         fig.canvas.draw()
 
     else:
@@ -558,40 +575,53 @@ def on_click_roi(event):
         plt.close()
         fig.canvas.mpl_disconnect(cid)
         
-def Define_roi(images_processed, main_dir):
+def Define_roi(images_processed, P):
 
-    global coords, images_temp, ax, fig, cid
+    global coords, images_temp, ax, fig, cid, P_temp
     
-    images_temp = [images_processed.copy()]
+    main_dir = os.path.split(os.path.split(P.sua_filename)[0])[0]
 
+    P_temp = P
+    
+    images_temp = mask_data(images_processed, P)
+
+    #images_temp = [images_processed.copy()]
+    
+    print "... Define following ROIs: ", np.loadtxt(main_dir+"/roi_names.txt",dtype=str)
+    
     roi_file = main_dir + '/roi_coords.txt'
 
     if (os.path.exists(roi_file)==False):
         fig, ax = plt.subplots()
         coords=[]
 
-        ax.imshow(images_processed, vmin=-.15, vmax=.15)#, vmin=0.0, vmax=0.02)
+        ax.imshow(images_temp[int(len(images_temp)/2)], vmin=-.15, vmax=.15, cmap=P.color_scheme)#, vmin=0.0, vmax=0.02)
         ax.set_title("Select single pixel to track")
         cid = fig.canvas.mpl_connect('button_press_event', on_click_roi)
         plt.show()
 
         np.savetxt(roi_file, coords)
         
-        return coords
+        P.coords = coords
     else:
-        return np.loadtxt(roi_file, dtype=str)
+        P.coords = np.loadtxt(roi_file, dtype=str)
 
 
 
 
-def mask_data(data, main_dir, midline_mask):
+def mask_data(data, P):
+    
+    # main_dir, midline_mask, sua_filename, P):
     
     n_pixels = len(data[0])
-            
+
+    main_dir = os.path.split(os.path.split(P.sua_filename)[0])[0]
+    
+    
     #Load General mask (removes background)
     generic_mask_file = main_dir + '/genericmask.txt' 
     if os.path.exists(generic_mask_file)==False:
-        Define_generic_mask(np.array(data), main_dir)
+        Define_generic_mask(np.array(data), main_dir, P.sua_filename)
            
     generic_coords = np.int32(np.loadtxt(generic_mask_file))
         
@@ -600,17 +630,26 @@ def mask_data(data, main_dir, midline_mask):
         generic_mask_indexes[generic_coords[i][0]][generic_coords[i][1]] = True
 
     #Load midline mask
-    for i in range(midline_mask):
-        generic_mask_indexes[:,n_pixels/2+int(midline_mask/2)-i]=True
+    for i in range(P.midline_mask):
+        generic_mask_indexes[:,n_pixels/2+int(P.midline_mask/2)-i]=True
         
     temp_array = np.ma.array(np.zeros((len(data),n_pixels,n_pixels),dtype=np.float32), mask=True)
     #Mask all frames; NB: PROBABLY FASTER METHOD
     for i in range(0, len(data),1):
-        temp_array[i] = np.ma.masked_array(data[i], mask=generic_mask_indexes)
+        temp_array[i] = np.ma.masked_array(data[i], mask=generic_mask_indexes, fill_value = 0)
     
-    
-    plt.imshow(generic_mask_indexes)
-    plt.show()
+    if P.show_mask:
+        
+        #Define_roi(sta_array, P)        #Use 92nd frame to draw brainmap;
+        coords = np.loadtxt(os.path.split(os.path.split(P.sua_filename)[0])[0]+"/roi_coords.txt")
+        n_pix = len(generic_mask_indexes)
+        for j in range(len(coords)):
+            for k in range(7):
+                for l in range(7):
+                    generic_mask_indexes[min(n_pix,int(coords[j][0])-1+k)][min(n_pix,int(coords[j][1])-1+l)]=-0.25
+      
+        plt.imshow(generic_mask_indexes)
+        plt.show()
     
     return temp_array
 
@@ -619,22 +658,20 @@ def mask_data(data, main_dir, midline_mask):
       
 def on_click(event):
     
-    global coords, images_temp, ax, fig, cid
+    global coords, img_out, ax, fig, cid, P_temp
     
-    n_pix = len(images_temp[0])
+    n_pix = len(img_out[0])
     
     if event.inaxes is not None:
         coords.append((event.ydata, event.xdata))
         for j in range(len(coords)):
             for k in range(3):
                 for l in range(3):
-                    images_temp[int(len(images_temp)/2)][min(n_pix,int(coords[j][0])-1+k)][min(n_pix,int(coords[j][1])-1+l)]=1
+                    img_out[min(n_pix,int(coords[j][0])-1+k)][min(n_pix,int(coords[j][1])-1+l)]=1
 
-        ax.imshow(images_temp[int(len(images_temp)/2)], vmin=-0.15, vmax=0.15)
-        #plt.show()
+        ax.imshow(img_out, vmin=50, vmax=150, cmap=P_temp.color_scheme)
         fig.canvas.draw()
-                    #figManager = plt.get_current_fig_manager()
-                    #figManager.window.showMaximized()
+
     else:
         print 'Exiting'
         plt.close()
@@ -642,20 +679,41 @@ def on_click(event):
 
 
        
-def Define_generic_mask(images_processed, main_dir):
+def Define_generic_mask(images_processed, P):
 
-    global coords, images_temp, ax, fig, cid
+    global coords, img_out, ax, fig, cid, P_temp
     
-    images_temp = images_processed.copy()
+    P_temp = P
     
+    main_dir = os.path.split(os.path.split(P.sua_filename)[0])[0]
+    
+    #ROTATE AND SHIFT IMAGE TO BE DISPLAYED FOR CROPPING FIRST
+    image_shift_file = P.sua_filename[:-5]+"_image_shift.txt"
+    print "Rotating images"
+    with open(image_shift_file, "r") as f: #Text file contains image shift and rotation angle info
+        data = csv.reader(f)
+        temp = []
+        for row in data:
+            temp.append(int(row[0]))
+    x_shift = temp[0]
+    y_shift = temp[1]
+    angle = temp[2]
+    
+    #img_out = skimage.transform.rotate(np.float64(images_processed[int(len(images_processed)/2)]), angle)#, mode='constant', cval=100)
+    img_out = skimage.transform.rotate(np.float64(P.imaging_original[int(len(P.imaging_original)/2)]), angle)#, mode='constant', cval=100)
+    img_out = np.roll(img_out, x_shift, axis=1)
+    img_out = np.roll(img_out, y_shift, axis=0)
+
     print images_processed.shape
 
     if (os.path.exists(main_dir + '/genericmask.txt')==False):
+        print "...making external mask..."
         fig, ax = plt.subplots()
         coords=[]
 
-        print images_temp[int(len(images_temp)/2)]
-        ax.imshow(images_temp[int(len(images_temp)/2)], vmin=-0.15, vmax=0.15)
+        print 
+        #ax.imshow(img_out, vmin=-0.1, vmax=0.1, cmap=P.color_scheme)
+        ax.imshow(img_out, vmin=50, vmax=150, cmap=P.color_scheme)
         ax.set_title("Compute generic (outside the brain) mask")
         cid = fig.canvas.mpl_connect('button_press_event', on_click)
         plt.show()
@@ -663,8 +721,8 @@ def Define_generic_mask(images_processed, main_dir):
         #******* MASK AND DISPLAY AREAS OUTSIDE GENERAL MASK 
         #Search points outside and black them out:
         all_points = []
-        for i in range(len(images_processed[0][0])):
-            for j in range(len(images_processed[0][0])):
+        for i in range(len(img_out[0])):
+            for j in range(len(img_out[0])):
                 all_points.append([i,j])
 
         all_points = np.array(all_points)
@@ -674,21 +732,21 @@ def Define_generic_mask(images_processed, main_dir):
         mask = vertixes_path.contains_points(all_points)
         counter=0
         coords_save=[]
-        for i in range(len(images_processed[0][0])):
-            for j in range(len(images_processed[0][0])):
+        for i in range(len(img_out[0])):
+            for j in range(len(img_out[0])):
                 if mask[counter] == False:
-                    images_processed[int(len(images_temp)/2)][i][j]=0
+                    img_out[i][j]=0
                     coords_save.append([i,j])
                 counter+=1
 
         fig, ax = plt.subplots()
-        ax.imshow(images_processed[int(len(images_temp)/2)])
+        ax.imshow(img_out, vmin=50, vmax=150, cmap=P.color_scheme)
         plt.show()
 
         np.savetxt(main_dir+'/genericmask.txt', coords_save)
 
 
-def make_sta_maps(unit, selected_epoch, sort_sua, all_frame_times, dff_stack, sua_filename, plotting, stack_color):
+def compute_sta(unit, P):
 
 #for unit in units:
     print "... cell: ", unit
@@ -697,15 +755,16 @@ def make_sta_maps(unit, selected_epoch, sort_sua, all_frame_times, dff_stack, su
     for k in range(180):
         sta_map_indexes.append([])
 
-    if "50compressed" in sua_filename: 
-        all_spikes = np.float32(sort_sua.units[unit])*1E-6*50.
+    if "50compressed" in P.sua_filename: 
+        all_spikes = np.float32(P.sort_sua.units[unit])*1E-6*50.
     else: 
-        all_spikes = np.float32(sort_sua.units[unit])*1E-6 #/25000.
+        all_spikes = np.float32(P.sort_sua.units[unit])*1E-6 #/25000.
     print "... no. spikes: ", len(all_spikes)
     
     if len(all_spikes)==0: 
         print "... cell has no spikes..."
-        return [], 0
+        P.epoch_spikes = 0
+        return
     
     frame_stack = []
     dt = 0.0333         #Timewindow to search for nearest frame
@@ -715,19 +774,20 @@ def make_sta_maps(unit, selected_epoch, sort_sua, all_frame_times, dff_stack, su
     
     n_processes = 25
     
-    
+
     #************************* EXCLUDE SPIKES OUTSIDE OF IMAGING PERIOD ********************
 
-    spike_indexes = np.where(np.logical_and(all_spikes>=all_frame_times[0], all_spikes<=all_frame_times[-1]))[0]    #Exclude spikes too close to beginning or end of recordings.
+    spike_indexes = np.where(np.logical_and(all_spikes>=P.all_frame_times[0], all_spikes<=P.all_frame_times[-1]))[0]    #Exclude spikes too close to beginning or end of recordings.
     spikes = all_spikes[spike_indexes]
+    
     
     #**************** FIND NEAREST FRAME TIMES FOR EACH SPIKE **************
     
-    frame_stack_file = sua_filename[:-5]+"_epoch"+str(selected_epoch)+"_unit"+str(unit)+"_frame_stack"
+    frame_stack_file = P.sua_filename[:-5]+"_epoch"+str(P.selected_epoch)+"_unit"+str(unit)+"_frame_stack"
     if os.path.exists(frame_stack_file+".npy")==False: 
         print "... finding frame indexes for # spikes: ", len(spikes), ' / ', len(all_spikes)
 
-        frame_stack.append(parmap.map(find_nearest_180_parallel, spikes, all_frame_times, dt, processes = n_processes))
+        frame_stack.append(parmap.map(find_nearest_180_parallel, spikes, P.all_frame_times, dt, processes = n_processes))
 
         print "... done..."
         frame_stack = np.vstack(frame_stack)
@@ -738,9 +798,31 @@ def make_sta_maps(unit, selected_epoch, sort_sua, all_frame_times, dff_stack, su
     else:
         frame_stack = np.load(frame_stack_file+'.npy')
 
+
+    #SAVE ARRAY WITH EVENTS THAT HAVE ALL FRAMES
+    if P.make_nopskip_arrays: 
+        print "... making no skip arrays..."
+        sta_array_noskip_file = P.sua_filename[:-5]+"_epoch"+str(P.selected_epoch)+"_unit"+str(unit)+"_color"+P.stack_color+"_sta_array_noskip"
+        if os.path.exists(sta_array_noskip_file+".npy")==False:
+            sta_array_noskip = []
+            for k in range(len(frame_stack.T)):
+                if None in frame_stack.T[k]:
+                    pass
+                else:
+                    sta_array_noskip.append(P.dff_stack[np.int32(frame_stack.T[k])])
+            
+            print len(frame_stack.T), len(sta_array_noskip)
+            
+            np.save(sta_array_noskip_file, sta_array_noskip)
+        #else:
+            #"...loading noskip from disk..."
+            #sta_array_no_skip = np.load(sta_array_noskip_file+".npy")
+
+        #quit()
+
     #********************** COMPUTE STA MAPS **********************
 
-    sta_array_file = sua_filename[:-5]+"_epoch"+str(selected_epoch)+"_unit"+str(unit)+"_color"+stack_color+"_sta_array"
+    sta_array_file = P.sua_filename[:-5]+"_epoch"+str(P.selected_epoch)+"_unit"+str(unit)+"_color"+P.stack_color+"_sta_array"
     if os.path.exists(sta_array_file+".npy")==False:
     
         #sta_array.append(parmap.map(make_stack_parallel, frame_stack, dff_stack_green, processes = n_processes))
@@ -748,14 +830,14 @@ def make_sta_maps(unit, selected_epoch, sort_sua, all_frame_times, dff_stack, su
         sta_array=[]
         print "...generating frames..."
         for ctr,frames in enumerate(frame_stack):               #****************** PARALLELIZE THIS!!!!
-            #ax = plt.subplot(10,18,ctr+1)                      #************ ALSO REMOVE REDUNDANT SPIKES THAT ARE OUTSIDE OF WINDOW
+            #ax = plt.subplot(10,18,ctr+1)                      
             frames_temp = []
             for k in frames:
                 if k != None: 
                     frames_temp.append(k)
             print "...frame: ", ctr, "  # of indexes: ", len(frames_temp)
             
-            temp_ave = np.mean(dff_stack[np.int32(frames_temp)],axis=0)         #********** ALSO CAN PARALLELIZE THIS
+            temp_ave = np.mean(P.dff_stack[np.int32(frames_temp)],axis=0)         #********** ALSO CAN PARALLELIZE THIS - BUT VERY FAST ALREADY
 
             sta_array.append(temp_ave)
         
@@ -768,39 +850,56 @@ def make_sta_maps(unit, selected_epoch, sort_sua, all_frame_times, dff_stack, su
     print sta_array.shape
     if len(sta_array)==0: 
         print "... cell has no spikes in epoch..."
-        return [], 0
-
+        P.epoch_spikes = 0
+        return
+    P.epoch_spikes = len(sta_array)
+    print "... spikes in epoch: ", P.epoch_spikes
 
     #*************************** ROTATE IMAGING STACK ********************
 
     #Load raw imaging data and save to .npy files; mmap on subsequent loads
-    sta_array_rotated = rotate_imaging(unit, sta_array, sua_filename)
+    sta_array_rotated = rotate_imaging(sta_array, P.sua_filename)
+
+
+    #********************* CHECK TO SEE THAT GENERIC MASK HAS BEEN MADE ********************** 
+    generic_mask_file = os.path.split(os.path.split(P.sua_filename)[0])[0] + '/genericmask.txt' 
+    if os.path.exists(generic_mask_file)==False:
+        Define_generic_mask(sta_array_rotated, P)
+
+
+    #******************** SMOOTH STA ARRAY *******************
+    
+    for k in range(len(sta_array_rotated)):
+        sta_array_rotated[k] = scipy.ndimage.filters.gaussian_filter(sta_array_rotated[k],P.smoothing_pixels)
 
 
     #********************* PLOTTING ***********************
-    if plotting: 
-        plot_figure(sua_filename, sta_array_rotated, unit, spikes, all_spikes)
+    if P.plotting: 
+        plot_figure(P.sua_filename, sta_array_rotated, unit, spikes, all_spikes, P.color_scheme, P)
     
-    return sta_array_rotated, len(spikes)  #
+    P.green_stack = sta_array_rotated
+    P.n_spikes = len(spikes)
+    
+    #return sta_array_rotated, len(spikes)  #
 
-def show_movies_2by1(unit, selected_epoch, green_stack, sua_filename, n_spikes):
+def show_movies_2by1(unit, P):
     
-    midline_mask = 5
+    midline_mask = P.midline_mask
     
     
     #*********** SMOOTHING
-    if True: 
-        for k in range(len(green_stack)):
-            green_stack[k] = scipy.ndimage.filters.gaussian_filter(green_stack[k],2)
+    #if True: 
+    #    for k in range(len(P.green_stack)):
+    #        green_stack[k] = scipy.ndimage.filters.gaussian_filter(green_stack[k],2)
     
         
     #************ MASK DATA
-    green_stack = mask_data(green_stack, os.path.split(os.path.split(sua_filename)[0])[0], midline_mask)
+    P.green_stack = mask_data(P.green_stack,P)
     #blue_stack = mask_data(blue_stack, os.path.split(os.path.split(sua_filename)[0])[0], midline_mask)
     
     
     #***********GENERATE ANIMATIONS
-    color_map = "viridis" #"jet"
+    color_map = P.color_scheme #"jet"
 
     Writer = animation.writers['ffmpeg']
     writer = Writer(fps=15, metadata=dict(artist='Me'), bitrate=3000)
@@ -816,20 +915,20 @@ def show_movies_2by1(unit, selected_epoch, green_stack, sua_filename, n_spikes):
     #Green stack
     ax = plt.subplot(gs[0,0])
     ax.get_xaxis().set_visible(False); ax.yaxis.set_ticks([]); ax.yaxis.labelpad = 0
-    vmax = np.nanmax(np.abs(green_stack)); vmin=-vmax
+    vmax = np.nanmax(np.abs(P.green_stack))*P.imshow_scaling; vmin=-vmax
     print "...vmax: ", vmax
     #vmax = 0.05; vmin=-vmax
     plt.title("Green ("+str(round(vmin*100,1))+"-"+str(round(vmax*100,1))+"%)", fontsize = fontsize)
-    im.append(plt.imshow(green_stack[0], vmin=vmin, vmax=vmax,  cmap=color_map, interpolation='none'))
+    im.append(plt.imshow(P.green_stack[0], vmin=vmin, vmax=vmax,  cmap=color_map, interpolation='none'))
     plt.ylabel("0% centred")
     
     #Green stack - Max dynamics
     ax = plt.subplot(gs[0,1])
     ax.get_xaxis().set_visible(False); ax.yaxis.set_ticks([]); ax.yaxis.labelpad = 0
-    vmax = np.nanmax(np.abs(green_stack))*0.5; vmin=-vmax #np.nanmin(green_stack)
+    vmax = np.nanmax(np.abs(P.green_stack))*0.5; vmin=-vmax #np.nanmin(P.green_stack)
     #vmax = 0.05; vmin=-vmax
     plt.title("Green ("+str(round(vmin*100,1))+"-"+str(round(vmax*100,1))+"%)", fontsize = fontsize)
-    im.append(plt.imshow(green_stack[0], vmin=vmin, vmax=vmax,  cmap=color_map, interpolation='none'))
+    im.append(plt.imshow(P.green_stack[0], vmin=vmin, vmax=vmax,  cmap=color_map, interpolation='none'))
     plt.ylabel("'Majid' plots")
 
 
@@ -837,209 +936,128 @@ def show_movies_2by1(unit, selected_epoch, green_stack, sua_filename, n_spikes):
     def updatefig(j):
         print "...animating frame: ", j, ' / ', n_frames
         #plt.suptitle(self.selected_dff_filter+'  ' +self.dff_method + "\nFrame: "+str(j)+"  " +str(format(float(j)/self.img_rate-self.parent.n_sec,'.2f'))+"sec  ", fontsize = 15)
-        plt.suptitle("Unit: "+str(unit)+"  # spikes: "+ str(n_spikes)+"\nTime: " +str(format(float(j-90)/30,'.2f'))+"sec  Frame: "+str(j), fontsize = fontsize+2)
+        plt.suptitle("Unit: "+str(unit)+"  # spikes: "+ str(P.n_spikes)+"\nTime: " +str(format(float(j-90)/30,'.2f'))+"sec  Frame: "+str(j), fontsize = fontsize+2)
 
         # set the data in the axesimage object
         ctr=0
-        im[ctr].set_array(green_stack[j]); ctr+=1
-        im[ctr].set_array(green_stack[j]); ctr+=1
+        im[ctr].set_array(P.green_stack[j]); ctr+=1
+        im[ctr].set_array(P.green_stack[j]); ctr+=1
 
         # return the artists set
         return im
 
-    n_frames = len(green_stack)
+    n_frames = len(P.green_stack)
     ani = animation.FuncAnimation(fig, updatefig, frames=range(n_frames), interval=100, blit=False, repeat=True)
 
-    ani.save(os.path.split(os.path.split(sua_filename)[0])[0]+'/movies/'+os.path.split(sua_filename)[1][:-5]+"_epoch"+str(selected_epoch)+"_unit"+str(unit)+'.mp4', writer=writer, dpi=100)
+    ani.save(os.path.split(os.path.split(P.sua_filename)[0])[0]+'/movies/'+os.path.split(P.sua_filename)[1][:-5]+"_epoch"+str(P.selected_epoch)+"_unit"+str(unit)+'.mp4', writer=writer, dpi=P.animation_resolution)
     
-    plt.show()
-
-def show_movies_2by2(unit, selected_epoch, green_stack, blue_stack, sua_filename, n_spikes):
-    
-    midline_mask = 0
-    green_stack = mask_data(green_stack, os.path.split(os.path.split(sua_filename)[0])[0], midline_mask)
-    blue_stack = mask_data(blue_stack, os.path.split(os.path.split(sua_filename)[0])[0], midline_mask)
-    
-    #***********GENERATE ANIMATIONS
-    color_map = "viridis" #"jet"
-
-    Writer = animation.writers['ffmpeg']
-    writer = Writer(fps=15, metadata=dict(artist='Me'), bitrate=3000)
-
-    fig = plt.figure()
-    im = []
-
-    #gs = gridspec.GridSpec(2,len(self.ca_stack)*2)
-    gs = gridspec.GridSpec(2,2)
-
-    fontsize = 8
-
-    #[Ca] stacks
-    titles = ["Green", "Short Blue", "Ratio"]
-
-    #Green stack
-    ax = plt.subplot(gs[0,0])
-    ax.get_xaxis().set_visible(False); ax.yaxis.set_ticks([]); ax.yaxis.labelpad = 0
-    vmax = np.nanmax(np.abs(green_stack)); vmin=-vmax
-    #vmax = 0.05; vmin=-vmax
-    plt.title("Green ("+str(round(vmin*100,1))+"-"+str(round(vmax*100,1))+"%)", fontsize = fontsize)
-    im.append(plt.imshow(green_stack[0], vmin=vmin, vmax=vmax,  cmap=color_map, interpolation='none'))
-    plt.ylabel("0% centred")
-    
-    #Green stack - Max dynamics
-    ax = plt.subplot(gs[1,0])
-    ax.get_xaxis().set_visible(False); ax.yaxis.set_ticks([]); ax.yaxis.labelpad = 0
-    vmax = np.nanmax(green_stack)*0.75; vmin=0 #np.nanmin(green_stack)
-    #vmax = 0.05; vmin=-vmax
-    plt.title("Green ("+str(round(vmin*100,1))+"-"+str(round(vmax*100,1))+"%)", fontsize = fontsize)
-    im.append(plt.imshow(green_stack[0], vmin=vmin, vmax=vmax,  cmap=color_map, interpolation='none'))
-    plt.ylabel("'Majid' plots")
+    if P.plotting:
+        plt.show()
 
 
-    #Short blue stack
-    ax = plt.subplot(gs[0,1])
-    ax.get_xaxis().set_visible(False); ax.yaxis.set_ticks([]); ax.yaxis.labelpad = 0
-    vmax = np.nanmax(np.abs(blue_stack))*0.5; vmin=-vmax
-    #vmax = 0.05; vmin=-vmax
-    plt.title("Blue ("+str(round(vmin*100,1))+"-"+str(round(vmax*100,1))+"%)", fontsize = fontsize)
-    im.append(plt.imshow(blue_stack[0], vmin=vmin, vmax=vmax, cmap=color_map, interpolation='none'))
+def plot_figure(sua_filename, sta_array, unit, spikes, all_spikes, color_scheme, P):
 
-    #Short blue stack - Max dynamics
-    ax = plt.subplot(gs[1,1])
-    ax.get_xaxis().set_visible(False); ax.yaxis.set_ticks([]); ax.yaxis.labelpad = 0
-    vmax = np.nanmax(blue_stack)*0.25; vmin=0 #np.nanmin(blue_stack)
-    #vmax = 0.05; vmin=-vmax
-    plt.title("Blue ("+str(round(vmin*100,1))+"-"+str(round(vmax*100,1))+"%)", fontsize = fontsize)
-    im.append(plt.imshow(blue_stack[0], vmin=vmin, vmax=vmax, cmap=color_map, interpolation='none'))
+    colors = P.colors
 
-
-
-    ##Ratio stack
-    #ratio_stack = np.divide(green_stack, blue_stack)
-    #ax = plt.subplot(gs[0,2])
-    #ax.get_xaxis().set_visible(False); ax.yaxis.set_ticks([]); ax.yaxis.labelpad = 0
-    ##vmax = np.nanmax(np.abs(ratio_stack)); vmin=-vmax
-    ##vmax = 20; vmin=-10
-
-    #data_1d = ratio_stack.ravel()
-
-    #vmax = np.percentile(data_1d, 0.80)               #Mark stroke as the 97.5 percentile and higher values; 
-    #vmin = np.percentile(data_1d, 0.2)               #Mark stroke as the 97.5 percentile and higher values; 
-
-    #print "...ratio vmax: ", vmax, vmin
-    #plt.title("Green / Blue", fontsize = 12)
-    #im.append(plt.imshow(ratio_stack[0], vmin=vmin, vmax=vmax,cmap=color_map, interpolation='none'))
-
-    #Loop to combine all video insets into 1
-    def updatefig(j):
-        print "...animating frame: ", j, ' / ', n_frames
-        #plt.suptitle(self.selected_dff_filter+'  ' +self.dff_method + "\nFrame: "+str(j)+"  " +str(format(float(j)/self.img_rate-self.parent.n_sec,'.2f'))+"sec  ", fontsize = 15)
-        plt.suptitle("Unit: "+str(unit)+"  # spikes: "+ str(n_spikes)+"\nTime: " +str(format(float(j)/30,'.2f'))+"sec  Frame: "+str(j), fontsize = fontsize+2)
-
-        # set the data in the axesimage object
-        ctr=0
-        im[ctr].set_array(green_stack[j]); ctr+=1
-        im[ctr].set_array(green_stack[j]); ctr+=1
-        im[ctr].set_array(blue_stack[j]); ctr+=1
-        im[ctr].set_array(blue_stack[j]); ctr+=1
-        #im[ctr].set_array(ratio_stack[j]); ctr+=1
-        #im[ctr].set_array(subtraction_stack[j]); ctr+=1
-
-        # return the artists set
-        return im
-
-    n_frames = len(green_stack)
-    # kick off the animation
-    ani = animation.FuncAnimation(fig, updatefig, frames=range(n_frames), interval=100, blit=False, repeat=True)
-    #ani = animation.FuncAnimation(fig, updatefig, frames=range(len(self.ca_stack[1])), interval=100, blit=False, repeat=True)
-
-    print os.path.split(os.path.split(sua_filename)[0])[0]+'/movies/'+os.path.split(sua_filename)[1][:-5]+"_epoch"+str(selected_epoch)+"_unit"+str(unit)+'.mp4'
-    
-    if True:
-        #ani.save(self.parent.root_dir+self.parent.animal.name+"/movie_files/"+self.selected_session+'_'+str(len(self.movie_stack))+'_'+str(self.selected_trial)+'trial.mp4', writer=writer, dpi=300)
-        ani.save(os.path.split(os.path.split(sua_filename)[0])[0]+'/movies/'+os.path.split(sua_filename)[1][:-5]+"_epoch"+str(selected_epoch)+"_unit"+str(unit)+'.mp4', writer=writer, dpi=600)
-    plt.show()
-
-
-
-def plot_figure(sua_filename, sta_array, unit, spikes, all_spikes):
-
-    colors = ['b','r', 'g', 'c','m','y','k','b','r']
-
-    #************************ DEFINE ROI TO TRACK ***********************
+    #*************************************************************
+    #************************ DEFINE ROI *************************
+    #*************************************************************
     path_dir, fname = os.path.split(sua_filename)
-    roi_coords = Define_roi(sta_array[92], path_dir)        #Use 92nd frame to draw brainmap;
-    #roi_coords = Define_roi(np.mean(sta_array), path_dir)        #Use 92nd frame to draw brainmap;
-    #print roi_coords.split()
+    Define_roi(sta_array, P)        #Use 92nd frame to draw brainmap;
 
-    print roi_coords[0], roi_coords[1]
+    #print roi_coords[0], roi_coords[1]
     
     stmtd = []
-    for j in range(len(roi_coords)):
+    for j in range(len(P.coords)):
         stmtd.append([])
         for k in range(len(sta_array)):
-            stmtd[j].append(sta_array[k][int(float(roi_coords[j][0]))][int(float(roi_coords[j][1]))])
-    
+            stmtd[j].append(sta_array[k][int(float(P.coords[j][0]))][int(float(P.coords[j][1]))])
 
     stmtd=np.array(stmtd)*100.
-    
-    #******************** MASK AND AVERAGE DATA ***************
-    block_save=5
-    img_out = []
-    start = 60; length = 60
-    for i in range(start, start+length, block_save):
-        img_out.append(np.ma.average(sta_array[i:i+block_save], axis=0))
+
+    #********************* PLOT ROI STMTD ***********************
+    font_size = P.font_size
+    fig = plt.figure()
+    ax=plt.subplot(121)
+    for k in range(len(stmtd)):
+        plt.plot(stmtd[k], color=colors[k], linewidth=6)
         
-    midline_mask = 10
+    plt.plot([0, len(stmtd[0])], [0,0], 'r--', linewidth =3, color='black', alpha=0.8)
+    plt.plot([int(len(stmtd[0])/2),int(len(stmtd[0])/2)], [-25,25], 'r--', linewidth =3, color='black', alpha=0.8)
     
+    vmax_ylim = np.max(np.abs(stmtd))
+    plt.ylim(-vmax_ylim-1, vmax_ylim+1)
+    ax.tick_params(axis='both', which='major', labelsize=font_size)
+    plt.ylabel("DF/F (%)", fontsize=font_size, fontweight='bold')
+    
+    new_xlabel = np.arange(-3.0, 3.1, 1)
+    old_xlabel = np.linspace(0, len(stmtd[0]), 7)
+    plt.xticks(old_xlabel, new_xlabel, fontsize=font_size)
+    plt.xlim(0, 180)
+    plt.xlabel("Time (sec)", fontsize=font_size, fontweight='bold')
+    
+    #********PLOT LEGEND
+    patches = []
+    for k in range(len(P.coords)):
+        patches.append(mpatches.Patch(color = P.colors[k]))
+    
+    labels = np.loadtxt(os.path.split(os.path.split(P.sua_filename)[0])[0]+"/roi_names.txt", dtype=str)
+
+    legend = ax.legend(patches, labels, fontsize=15, loc=0, title="ROI Time Courses")
+    plt.setp(plt.gca().get_legend().get_texts(), fontsize=font_size-5)
+    legend.get_title().set_fontsize(font_size-5)
+
+
+    #**************************************************************
+    #************************ PLOT IMG STACK **********************
+    #**************************************************************
+
+    block_save=P.block_save
+    img_out = []
+    start = int(P.start*30+90); end = int(P.end*30+90)
+    for i in range(start, end, block_save):
+        #img_out.append(np.ma.average(sta_array[i:i+block_save], axis=0))
+        img_out.append(np.mean(sta_array[i:i+block_save], axis=0))
+        
+    img_out_nomask = np.array(img_out)
+
+    midline_mask = P.midline_mask
     path_dir = os.path.split(os.path.split(sua_filename)[0])[0]
-    img_out =  mask_data(img_out, path_dir, midline_mask)
+    img_out =  mask_data(img_out, P)
     
-    v_max = np.nanmax(np.abs(img_out))*0.75; v_min = -v_max
+    
+    v_max = vmax_ylim*1E-2; v_min = -v_max
     img_out = np.ma.hstack((img_out))
     
-    #Make midline bar
+    #Make t=0 sec bar in time stack
     img_out[:,len(img_out[1])/2-3:len(img_out[1])/2]=v_min
     
-    
     fig = plt.figure()
-    ax=plt.subplot(211)
+    ax=plt.subplot(111)
 
-    im = plt.imshow(img_out, vmin=v_min, vmax=v_max, cmap="viridis")
+    im = plt.imshow(img_out, vmin=v_min, vmax=v_max, cmap=color_scheme)
 
-    #new_xlabel = np.arange(-3.0+start*0.033, -3.0+(start+length)*0.033, 0.5)
-    #old_xlabel = np.linspace(0, img_out.shape[1], 7)
-    #plt.xticks(old_xlabel, new_xlabel, fontsize=25)
+    print img_out.shape
+    new_xlabel = np.round(np.linspace(P.start,P.end, 7),2)
+    old_xlabel = np.linspace(0, img_out.shape[1], 7)
+    print new_xlabel
+    print old_xlabel
+    plt.xticks(old_xlabel, new_xlabel, fontsize=25)
     
-    plt.xlabel("Time from spike (sec)", fontsize = 30)
-    ax.get_yaxis().set_visible(False)
-    ax.get_xaxis().set_visible(False)
-
+    plt.xlabel("Time from event (sec)", fontsize = font_size, fontweight = 'bold')
+    #ax.get_yaxis().set_visible(False)
+    #ax.get_xaxis().set_visible(False)
+    plt.yticks([])
+    plt.ylabel("#"+str(unit+1), fontsize = font_size, fontweight = 'bold')
     
     #********************* PLOT COLOR BAR ******************
     cbar = fig.colorbar(im, ticks = [v_min, 0, v_max], ax=ax, fraction=0.02, pad=0.05, aspect=3)
     cbar.ax.set_yticklabels([str(round(v_min*100,1))+"%", '0'+"%", str(round(v_max*100,1))+"%"])  # vertically oriented colorbar
-    cbar.ax.tick_params(labelsize=15) 
+    cbar.ax.tick_params(labelsize=20) 
         
-    
-    #********************* PLOT STMTD ***********************
-    ax=plt.subplot(212)
-    for k in range(len(stmtd)):
-        plt.plot(stmtd[k], color=colors[k], linewidth=3)
-        
-    plt.plot([0, len(stmtd[0])], [0,0], 'r--', color='black')
-    plt.plot([int(len(stmtd[0])/2),int(len(stmtd[0])/2)], [-25,25], 'r--', color='black')
-    plt.ylim(np.min(stmtd), np.max(stmtd))
-    ax.tick_params(axis='both', which='major', labelsize=25)
-    plt.ylabel("DF/F (%)", fontsize=25)
-    
-    new_xlabel = np.arange(-3.0, 3.1, 1)
-    old_xlabel = np.linspace(0, len(stmtd[0]), 7)
-    plt.xticks(old_xlabel, new_xlabel, fontsize=25)
-    plt.xlim(0, 180)
-    plt.xlabel("Time (sec)", fontsize=25)
     
     plt.suptitle("Cell: "+str(unit) + " # spikes in epoch: "+ str(len(spikes))+" / "+str(len(all_spikes))+"\nDF/F max: "+str(round(v_max*100,1))+"%", fontsize=30)
+
     plt.show()
-    
+
     plt.close(fig)
